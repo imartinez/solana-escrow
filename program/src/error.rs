@@ -3,7 +3,7 @@ use thiserror::Error;
 use solana_program::program_error::ProgramError;
 
 #[derive(Error, Debug, Copy, Clone)]
-pub enum EscrowError {
+pub enum LuckySolError {
     /// Invalid instruction
     #[error("Invalid Instruction")]
     InvalidInstruction,
@@ -18,8 +18,8 @@ pub enum EscrowError {
     AmountOverflow,
 }
 
-impl From<EscrowError> for ProgramError {
-    fn from(e: EscrowError) -> Self {
+impl From<LuckySolError> for ProgramError {
+    fn from(e: LuckySolError) -> Self {
         ProgramError::Custom(e as u32)
     }
 }

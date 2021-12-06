@@ -1,24 +1,31 @@
 use solana_program::program_error::ProgramError;
 use std::convert::TryInto;
 
-use crate::error::EscrowError::InvalidInstruction;
+use crate::error::LuckySolError::InvalidInstruction;
 
-pub enum EscrowInstruction {
-    /// Starts the trade by creating and populating an escrow account and transferring ownership of the given temp token account to the PDA
+pub enum LuckySolInstruction {
+    /// Starts the game by saving the game data in a Data account
     ///
     ///
     /// Accounts expected:
     ///
-    /// 0. `[signer]` The account of the person initializing the escrow
-    /// 1. `[writable]` Temporary token account that should be created prior to this instruction and owned by the initializer
-    /// 2. `[]` The initializer's token account for the token they will receive should the trade go through
-    /// 3. `[writable]` The escrow account, it will hold all necessary info about the trade.
-    /// 4. `[]` The rent sysvar
-    /// 5. `[]` The token program
-    InitEscrow {
-        /// The amount party A expects to receive of token Y
-        amount: u64,
+    /// 0. `[]` The account of the person initializing the game
+    /// 1. `[]` Deposit account that should be created and funded prior to this instruction and owned by the program
+    /// 3. `[writable]` The Data account, it will hold all necessary info about the game.
+    /// 4. `[]` The rent sysvar    
+    InitLuckySol {
+        /// The bid amount the player is Bidding
+        bid: u64,
     },
+    /// Cancels the game, by emptying both the Deposit account and the Data account in favour of initializer of game
+    ///
+    ///
+    /// Accounts expected:
+    ///
+    /// 0. `[signer]` The account of the person cancelling the game
+    /// 1. `[writable]` Deposit account where the deposit is, if initialized
+    /// 3. `[writable]` The Data account, holding the necessary info about the game.    
+    CancelLuckySol { },
     /// Accepts a trade
     ///
     ///
@@ -34,33 +41,34 @@ pub enum EscrowInstruction {
     /// 7. `[]` The token program
     /// 8. `[]` The PDA account
     Exchange {
-        /// the amount the taker expects to be paid in the other token, as a u64 because that's the max possible supply of a token
-        amount: u64,
+        /// the bid the taker expects to be paid in the other token, as a u64 because that's the max possible supply of a token
+        bid: u64,
     },
 }
 
-impl EscrowInstruction {
+impl LuckySolInstruction {
     /// Unpacks a byte buffer into a [EscrowInstruction](enum.EscrowInstruction.html).
     pub fn unpack(input: &[u8]) -> Result<Self, ProgramError> {
         let (tag, rest) = input.split_first().ok_or(InvalidInstruction)?;
 
         Ok(match tag {
-            0 => Self::InitEscrow {
-                amount: Self::unpack_amount(rest)?,
+            0 => Self::InitLuckySol {
+                bid: Self::unpack_bid(rest)?,
             },
-            1 => Self::Exchange {
-                amount: Self::unpack_amount(rest)?,
+            1 => Self::CancelLuckySol {},
+            2 => Self::Exchange {
+                bid: Self::unpack_bid(rest)?,
             },
             _ => return Err(InvalidInstruction.into()),
         })
     }
 
-    fn unpack_amount(input: &[u8]) -> Result<u64, ProgramError> {
-        let amount = input
+    fn unpack_bid(input: &[u8]) -> Result<u64, ProgramError> {
+        let bid = input
             .get(..8)
             .and_then(|slice| slice.try_into().ok())
             .map(u64::from_le_bytes)
             .ok_or(InvalidInstruction)?;
-        Ok(amount)
+        Ok(bid)
     }
 }

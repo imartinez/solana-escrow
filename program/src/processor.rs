@@ -11,7 +11,7 @@ use solana_program::{
 
 use spl_token::state::Account as TokenAccount;
 
-use crate::{error::EscrowError, instruction::EscrowInstruction, state::Escrow};
+use crate::{error::LuckySolError, instruction::LuckySolInstruction, state::LuckySol};
 
 pub struct Processor;
 impl Processor {
@@ -20,23 +20,27 @@ impl Processor {
         accounts: &[AccountInfo],
         instruction_data: &[u8],
     ) -> ProgramResult {
-        let instruction = EscrowInstruction::unpack(instruction_data)?;
+        let instruction = LuckySolInstruction::unpack(instruction_data)?;
 
         match instruction {
-            EscrowInstruction::InitEscrow { amount } => {
-                msg!("Instruction: InitEscrow");
-                Self::process_init_escrow(accounts, amount, program_id)
+            LuckySolInstruction::InitLuckySol { bid } => {
+                msg!("Instruction: InitLuckySol");
+                Self::process_init_lucky_sol(accounts, bid, program_id)
             }
-            EscrowInstruction::Exchange { amount } => {
+            LuckySolInstruction::CancelLuckySol { } => {
+                msg!("Instruction: CancelLuckySol");
+                Self::process_cancel_lucky_sol(accounts, program_id)
+            }
+            LuckySolInstruction::Exchange { bid } => {
                 msg!("Instruction: Exchange");
-                Self::process_exchange(accounts, amount, program_id)
+                Self::process_exchange(accounts, bid, program_id)
             }
         }
     }
 
-    fn process_init_escrow(
+    fn process_init_lucky_sol(
         accounts: &[AccountInfo],
-        amount: u64,
+        bid: u64,
         program_id: &Pubkey,
     ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
@@ -46,53 +50,70 @@ impl Processor {
             return Err(ProgramError::MissingRequiredSignature);
         }
 
-        let temp_token_account = next_account_info(account_info_iter)?;
+        let deposit_account = next_account_info(account_info_iter)?;
 
-        let token_to_receive_account = next_account_info(account_info_iter)?;
-        if *token_to_receive_account.owner != spl_token::id() {
-            return Err(ProgramError::IncorrectProgramId);
-        }
-
-        let escrow_account = next_account_info(account_info_iter)?;
+        let data_account = next_account_info(account_info_iter)?;
         let rent = &Rent::from_account_info(next_account_info(account_info_iter)?)?;
 
-        if !rent.is_exempt(escrow_account.lamports(), escrow_account.data_len()) {
-            return Err(EscrowError::NotRentExempt.into());
+        if !rent.is_exempt(data_account.lamports(), data_account.data_len()) {
+            return Err(LuckySolError::NotRentExempt.into());
         }
 
-        let mut escrow_info = Escrow::unpack_unchecked(&escrow_account.try_borrow_data()?)?;
-        if escrow_info.is_initialized() {
+        let mut lucky_sol_data = LuckySol::unpack_unchecked(&data_account.try_borrow_data()?)?;
+        if lucky_sol_data.is_initialized() {
             return Err(ProgramError::AccountAlreadyInitialized);
         }
 
-        escrow_info.is_initialized = true;
-        escrow_info.initializer_pubkey = *initializer.key;
-        escrow_info.temp_token_account_pubkey = *temp_token_account.key;
-        escrow_info.initializer_token_to_receive_account_pubkey = *token_to_receive_account.key;
-        escrow_info.expected_amount = amount;
+        lucky_sol_data.is_initialized = true;
+        lucky_sol_data.initializer_pubkey = *initializer.key;
+        lucky_sol_data.initializer_deposit_account_pubkey = *deposit_account.key;
+        lucky_sol_data.deposit_amount = bid;
 
-        Escrow::pack(escrow_info, &mut escrow_account.try_borrow_mut_data()?)?;
-        let (pda, _nonce) = Pubkey::find_program_address(&[b"escrow"], program_id);
+        LuckySol::pack(lucky_sol_data, &mut data_account.try_borrow_mut_data()?)?;
 
-        let token_program = next_account_info(account_info_iter)?;
-        let owner_change_ix = spl_token::instruction::set_authority(
-            token_program.key,
-            temp_token_account.key,
-            Some(&pda),
-            spl_token::instruction::AuthorityType::AccountOwner,
-            initializer.key,
-            &[&initializer.key],
-        )?;
+        Ok(())
+    }
 
-        msg!("Calling the token program to transfer token account ownership...");
-        invoke(
-            &owner_change_ix,
-            &[
-                temp_token_account.clone(),
-                initializer.clone(),
-                token_program.clone(),
-            ],
-        )?;
+    fn process_cancel_lucky_sol(
+        accounts: &[AccountInfo],
+        program_id: &Pubkey,
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let initializer = next_account_info(account_info_iter)?;
+
+        if !initializer.is_signer {
+            return Err(ProgramError::MissingRequiredSignature);
+        }        
+
+        let deposit_account = next_account_info(account_info_iter)?;
+
+        let data_account = next_account_info(account_info_iter)?;
+
+        let lucky_sol_data = LuckySol::unpack(&data_account.try_borrow_data()?)?;
+
+        // Check that the sent data account contains the deposit
+        if lucky_sol_data.initializer_deposit_account_pubkey != *deposit_account.key {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        // Check that the sent data account contains the initializer
+        if lucky_sol_data.initializer_pubkey != *initializer.key {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        msg!("Cancelling, sending deposit and rent fee back to player...");
+        **initializer.try_borrow_mut_lamports()? = initializer
+            .lamports()
+            .checked_add(data_account.lamports())
+            .ok_or(LuckySolError::AmountOverflow)?;
+        **data_account.try_borrow_mut_lamports()? = 0;
+        *data_account.try_borrow_mut_data()? = &mut [];
+
+        **initializer.try_borrow_mut_lamports()? = initializer
+            .lamports()
+            .checked_add(deposit_account.lamports())
+            .ok_or(LuckySolError::AmountOverflow)?;
+        **deposit_account.try_borrow_mut_lamports()? = 0;
 
         Ok(())
     }
@@ -102,7 +123,7 @@ impl Processor {
         amount_expected_by_taker: u64,
         program_id: &Pubkey,
     ) -> ProgramResult {
-        let account_info_iter = &mut accounts.iter();
+        /*let account_info_iter = &mut accounts.iter();
         let taker = next_account_info(account_info_iter)?;
 
         if !taker.is_signer {
@@ -119,24 +140,24 @@ impl Processor {
         let (pda, nonce) = Pubkey::find_program_address(&[b"escrow"], program_id);
 
         if amount_expected_by_taker != pdas_temp_token_account_info.amount {
-            return Err(EscrowError::ExpectedAmountMismatch.into());
+            return Err(LuckySolError::ExpectedAmountMismatch.into());
         }
 
         let initializers_main_account = next_account_info(account_info_iter)?;
         let initializers_token_to_receive_account = next_account_info(account_info_iter)?;
-        let escrow_account = next_account_info(account_info_iter)?;
+        let data_account = next_account_info(account_info_iter)?;
 
-        let escrow_info = Escrow::unpack(&escrow_account.try_borrow_data()?)?;
+        let lucky_sol_data = LuckySol::unpack(&data_account.try_borrow_data()?)?;
 
-        if escrow_info.temp_token_account_pubkey != *pdas_temp_token_account.key {
+        if lucky_sol_data.temp_token_account_pubkey != *pdas_temp_token_account.key {
             return Err(ProgramError::InvalidAccountData);
         }
 
-        if escrow_info.initializer_pubkey != *initializers_main_account.key {
+        if lucky_sol_data.initializer_pubkey != *initializers_main_account.key {
             return Err(ProgramError::InvalidAccountData);
         }
 
-        if escrow_info.initializer_token_to_receive_account_pubkey
+        if lucky_sol_data.initializer_token_to_receive_account_pubkey
             != *initializers_token_to_receive_account.key
         {
             return Err(ProgramError::InvalidAccountData);
@@ -150,7 +171,7 @@ impl Processor {
             initializers_token_to_receive_account.key,
             taker.key,
             &[&taker.key],
-            escrow_info.expected_amount,
+            lucky_sol_data.expected_amount,
         )?;
         msg!("Calling the token program to transfer tokens to the escrow's initializer...");
         invoke(
@@ -207,10 +228,10 @@ impl Processor {
         msg!("Closing the escrow account...");
         **initializers_main_account.try_borrow_mut_lamports()? = initializers_main_account
             .lamports()
-            .checked_add(escrow_account.lamports())
-            .ok_or(EscrowError::AmountOverflow)?;
-        **escrow_account.try_borrow_mut_lamports()? = 0;
-        *escrow_account.try_borrow_mut_data()? = &mut [];
+            .checked_add(data_account.lamports())
+            .ok_or(LuckySolError::AmountOverflow)?;
+        **data_account.try_borrow_mut_lamports()? = 0;
+        *data_account.try_borrow_mut_data()? = &mut [];*/
 
         Ok(())
     }
