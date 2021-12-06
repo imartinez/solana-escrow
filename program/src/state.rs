@@ -9,8 +9,8 @@ use arrayref::{array_mut_ref, array_ref, array_refs, mut_array_refs};
 pub struct LuckySol {
     pub is_initialized: bool,
     pub initializer_pubkey: Pubkey,
-    pub initializer_deposit_account_pubkey: Pubkey,
-    pub deposit_amount: u64,
+    pub bid_amount: u64,
+    pub won: bool,
 }
 
 impl Sealed for LuckySol {}
@@ -22,16 +22,21 @@ impl IsInitialized for LuckySol {
 }
 
 impl Pack for LuckySol {
-    const LEN: usize = 73;
+    const LEN: usize = 42;
     fn unpack_from_slice(src: &[u8]) -> Result<Self, ProgramError> {
         let src = array_ref![src, 0, LuckySol::LEN];
         let (
             is_initialized,
             initializer_pubkey,
-            initializer_deposit_account_pubkey,
-            deposit_amount,
-        ) = array_refs![src, 1, 32, 32, 8];
+            bid_amount,
+            won,
+        ) = array_refs![src, 1, 32, 8, 1];
         let is_initialized = match is_initialized {
+            [0] => false,
+            [1] => true,
+            _ => return Err(ProgramError::InvalidAccountData),
+        };
+        let won = match won {
             [0] => false,
             [1] => true,
             _ => return Err(ProgramError::InvalidAccountData),
@@ -40,8 +45,8 @@ impl Pack for LuckySol {
         Ok(LuckySol {
             is_initialized,
             initializer_pubkey: Pubkey::new_from_array(*initializer_pubkey),
-            initializer_deposit_account_pubkey: Pubkey::new_from_array(*initializer_deposit_account_pubkey),
-            deposit_amount: u64::from_le_bytes(*deposit_amount),
+            bid_amount: u64::from_le_bytes(*bid_amount),
+            won,
         })
     }
 
@@ -50,20 +55,20 @@ impl Pack for LuckySol {
         let (
             is_initialized_dst,
             initializer_pubkey_dst,
-            initializer_deposit_account_pubkey_dst,
-            deposit_amount_dst,
-        ) = mut_array_refs![dst, 1, 32, 32, 8];
+            bid_amount_dst,
+            won_dst,
+        ) = mut_array_refs![dst, 1, 32, 8, 1];
 
         let LuckySol {
             is_initialized,
             initializer_pubkey,
-            initializer_deposit_account_pubkey,
-            deposit_amount,
+            bid_amount,
+            won,
         } = self;
 
         is_initialized_dst[0] = *is_initialized as u8;
         initializer_pubkey_dst.copy_from_slice(initializer_pubkey.as_ref());
-        initializer_deposit_account_pubkey_dst.copy_from_slice(initializer_deposit_account_pubkey.as_ref());
-        *deposit_amount_dst = deposit_amount.to_le_bytes();
+        *bid_amount_dst = bid_amount.to_le_bytes();
+        won_dst[0] = *won as u8;
     }
 }
